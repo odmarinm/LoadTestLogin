@@ -86,7 +86,7 @@ F7. No rate limiting (HTTP 429) or blocking was observed from the
   code can be used as a quality gate in a CI/CD pipeline.
 
 
-5. LIMITATIONS AND RECOMMENDATIONS
+4. LIMITATIONS AND RECOMMENDATIONS
 ---------------------------------------------------------------------
 - The test ran against a public, shared demo API over a home internet
   connection; part of the measured time is network latency between
