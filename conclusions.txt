@@ -1,0 +1,103 @@
+=====================================================================
+ FINDINGS AND CONCLUSIONS - LOAD TEST OF THE LOGIN SERVICE
+=====================================================================
+Service tested : POST https://fakestoreapi.com/auth/login
+Tool           : k6 v2.4.0
+Execution date : 2026-11-19
+Load generator : 1 Windows 11 workstation (home internet connection)
+Test data      : 5 users from data/users.csv, used in round-robin
+
+
+1. OFFICIAL RUN - 20 TPS (results/summary-20tps.txt)
+---------------------------------------------------------------------
+Scenario: ramp 1->20 TPS (30 s), steady 20 TPS (2 min), ramp-down (15 s).
+
+  Metric                         Result        Criterion      Status
+  ----------------------------   -----------   ------------   ------
+  Total requests                 2,865         -              -
+  Steady-state throughput        20 TPS        >= 20 TPS      PASS
+  Average throughput (incl.      17.3 TPS      -              -
+    ramp-up and ramp-down)
+  Dropped iterations             0             -              PASS
+  Response time - average        477 ms        -              -
+  Response time - median         471 ms        -              -
+  Response time - p(90)          542 ms        -              -
+  Response time - p(95)          569 ms        < 1500 ms      PASS
+  Response time - p(99)          644 ms        -              -
+  Response time - max            1.06 s        < 1500 ms      PASS
+  HTTP error rate                0.00 %        < 3 %          PASS
+  Functional error rate          0.00 %        < 3 %          PASS
+  Checks passed                  100 % (8,595) > 97 %         PASS
+  Max concurrent VUs used        13            -              -
+
+Result: ALL ACCEPTANCE CRITERIA PASSED (k6 exit code 0).
+
+Note on throughput: the 17.3 TPS reported by k6 is the average over the
+whole test, including the 45 s of ramp-up/ramp-down. The arrival-rate
+executor kept 20 TPS during the 2-minute steady state with 0 dropped
+iterations (~2,400 of the 2,865 requests were sent at 20 TPS).
+
+2. FINDINGS
+---------------------------------------------------------------------
+F1. The login service meets the agreed SLA at 20 TPS with a wide
+    margin: p95 = 569 ms is ~38% of the 1.5 s limit and the slowest
+    request (1.06 s) is still ~440 ms below the limit.
+
+F2. No errors were observed: 0 HTTP errors, 0 timeouts, 0 functional
+    failures. All 5 CSV users authenticated and received a JWT token.
+
+F3. Response times are stable and do not grow with load (20 -> 40 TPS
+    gives the same average and only slightly higher p95/max). The
+    distribution is narrow (min 366 ms, median 471 ms), so most of the
+    time is fixed latency (network round trip + server processing),
+    not queueing.
+
+F4. Almost all of the time is server wait (http_req_waiting ~476 ms avg);
+    sending/receiving are below 2 ms. Connection setup (TLS handshake,
+    ~70-280 ms) only happens on the first request of each VU thanks to
+    keep-alive, so it has almost no effect on the average.
+
+F5. Rare outliers exist: max (1.06 s at 20 TPS, 1.19 s at 40 TPS) is
+    about twice the p99. Because the requirement is a hard maximum of
+    1.5 s, these outliers are the main risk: a single slow request
+    (network jitter, cold connection, GC pause on the server) can fail
+    the "max" threshold even when the service is healthy.
+
+F6. The small number of dropped iterations at 40 TPS happened during
+    the ramp-up, caused by the load generator (VU allocation), not by
+    the service. Raising preAllocatedVUs removes it.
+
+F7. No rate limiting (HTTP 429) or blocking was observed from the
+    public API at these rates.
+
+
+3. CONCLUSIONS
+---------------------------------------------------------------------
+- The login service of FakeStore API SUPPORTS the required load of
+  20 TPS, fulfilling the response time (<= 1.5 s) and error rate (< 3%)
+  criteria. Verdict: PASSED.
+
+- The service has at least 2x headroom: at 40 TPS it still met every
+  criterion without visible degradation. Its saturation point was not
+  reached in this exercise.
+
+- The k6 script is reusable and parameterized (target TPS, duration and
+  base URL by environment variables; credentials by CSV), and its exit
+  code can be used as a quality gate in a CI/CD pipeline.
+
+
+5. LIMITATIONS AND RECOMMENDATIONS
+---------------------------------------------------------------------
+- The test ran against a public, shared demo API over a home internet
+  connection; part of the measured time is network latency between
+  the generator and the server. Results can vary with the time of day
+  and network conditions. For a production decision, run the test from
+  a network close to the server and repeat it several times.
+
+- A strict "max < 1500 ms" criterion is sensitive to single outliers.
+  It is recommended to agree the SLA as a percentile (e.g. p95 or p99
+  < 1500 ms) and keep the max only as a reference.
+
+- Only 5 users were available, so the same credentials are reused many
+  times. If the server caches sessions/tokens per user, a real
+  population could behave differently; a larger data set is recommended.
